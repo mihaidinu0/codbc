@@ -1,16 +1,3 @@
-package com.example.backend.service;
-
-import com.example.backend.dto.CreateRoundRequest;
-import com.example.backend.dto.CreateRoundResponse;
-import com.example.backend.model.*;
-import com.example.backend.repo.*;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.util.*;
-import java.util.stream.Collectors;
-
 @Service
 @RequiredArgsConstructor
 public class RoundService {
@@ -22,8 +9,8 @@ public class RoundService {
 
     @Transactional
     public CreateRoundResponse createRound(CreateRoundRequest dto) {
-        // 1) creator
-        MyUser creator = userRepo.findByEmail(dto.getCreatorEmail())
+        // 1) creatorul trebuie să existe
+        MyUser creator = userRepo.findById(dto.getCreatorEmail())
                 .orElseThrow(() -> new IllegalArgumentException("Creator not found: " + dto.getCreatorEmail()));
 
         // 2) runda
@@ -33,22 +20,29 @@ public class RoundService {
         round.setCreator(creator);
         round = roundRepo.save(round);
 
-        // 3) normalizează emailurile + ia userii existenți
-        var uniqEmails = dto.getCandidateEmails().stream()
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                .filter(s -> !s.isBlank())
+        // 3) normalizăm lista de email-uri
+        var emails = dto.getCandidateEmails().stream()
+                .filter(Objects::nonNull).map(String::trim).filter(s -> !s.isBlank())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
 
-        var users = userRepo.findByEmailIn(uniqEmails);
-        var found = users.stream().map(MyUser::getEmail).map(String::toLowerCase).collect(Collectors.toSet());
-        var notFound = uniqEmails.stream().filter(e -> !found.contains(e.toLowerCase())).toList();
+        // 4) CREĂM userii candidați (dacă nu există)
+        List<MyUser> candidatesUsers = new ArrayList<>();
+        for (String email : emails) {
+            MyUser u = userRepo.findById(email).orElseGet(() -> {
+                MyUser nu = new MyUser();
+                nu.setEmail(email);
+                nu.setRole("CANDIDATE");
+                nu.setActive(true);
+                return userRepo.save(nu);
+            });
+            candidatesUsers.add(u);
+        }
 
-        // 4) creează legăturile candidat ↔ rundă
+        // 5) legăturile Candidate și trimiterea emailurilor
         List<Candidate> links = new ArrayList<>();
-        for (MyUser u : users) {
+        for (MyUser u : candidatesUsers) {
             Candidate c = new Candidate();
-            c.setIdCandidate(new CandidateId(u.getIdUser(), round.getIdRound())); // (userId, roundId)
+            c.setIdCandidate(new CandidateId(u.getEmail(), round.getIdRound()));
             c.setCandidate(u);
             c.setRound(round);
             c.setStatus("INVITED");
@@ -57,16 +51,14 @@ public class RoundService {
         }
         candidateRepo.saveAll(links);
 
-        // 5) trimite câte un link per candidat (JWT cu sub=email, rid=roundId, exp)
-        for (MyUser u : users) {
+        for (MyUser u : candidatesUsers) {
             emailService.sendMagicLink(u.getEmail(), round.getIdRound());
         }
 
-        // 6) răspuns
         var resp = new CreateRoundResponse();
         resp.setIdRound(round.getIdRound());
-        resp.setInvitedCount(users.size());
-        resp.setNotFoundEmails(notFound);
+        resp.setInvitedCount(candidatesUsers.size());
+        resp.setCreatedEmails(new ArrayList<>(emails));
         return resp;
     }
 }
