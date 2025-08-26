@@ -1,37 +1,32 @@
+package com.example.backend.controller;
+
+import com.example.backend.service.MagicService;
+import com.example.backend.service.MagicService.Outcome;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+
+import jakarta.servlet.http.HttpServletResponse;
+
 @Controller
 @RequiredArgsConstructor
 public class MagicController {
 
-    private final MagicJwt magicJwt;
-    private final UserRepository userRepo;
-    private final CandidateRepository candidateRepo;
+    private final MagicService magicService;
 
     @GetMapping("/magic/verify")
-    public String verify(@RequestParam("jwt") String jwt, HttpSession session, Model model) {
-        try {
-            var data = magicJwt.parse(jwt);        // verifică semnătură + exp
-            var email = data.email();
-            var roundId = data.roundId();
+    public ResponseEntity<Void> verify(@RequestParam("jwt") String jwt, HttpServletResponse resp) {
+        Outcome outcome = magicService.verify(jwt);
 
-            var user = userRepo.findById(email)
-                    .orElseThrow(() -> new RuntimeException("User not found"));
-            var cid = new CandidateId(user.getEmail(), roundId);
-
-            var cand = candidateRepo.findById(cid)
-                    .orElseThrow(() -> new RuntimeException("Not a candidate for this round"));
-
-            if (cand.isTokenUsed()) { model.addAttribute("error","Link already used"); return "invalid"; }
-
-            cand.setTokenUsed(true);               // one-time per (user, round)
-            candidateRepo.save(cand);
-
-            session.setAttribute("userEmail", email);
-            model.addAttribute("email", email);
-            model.addAttribute("roundId", roundId);
-            return "welcome";                      // sau redirect la UI-ul tău
-        } catch (JwtException e) {
-            model.addAttribute("error","Invalid or expired link");
-            return "invalid";
+        if (outcome.getCookie() != null) {
+            resp.addCookie(outcome.getCookie());
         }
+
+        return ResponseEntity.status(303) // See Other
+                .header(HttpHeaders.LOCATION, outcome.getRedirect().toString())
+                .build();
     }
 }
